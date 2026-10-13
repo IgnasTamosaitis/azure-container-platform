@@ -12,3 +12,12 @@ __pycache__/
 notes.txt
 scripts/
 linux-lab/
+
+# Terraform local files and state
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+*.tfplan
+crash.log
