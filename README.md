@@ -1,164 +1,71 @@
 # Azure Container Platform
 
-A hands-on Cloud Engineering and DevOps portfolio project demonstrating containerized application deployment to Microsoft Azure using Terraform, Docker, GitHub Actions, and secure workload identity federation.
+[![CI](https://github.com/IgnasTamosaitis/azure-container-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/IgnasTamosaitis/azure-container-platform/actions/workflows/ci.yml)
 
-**Project status:** Implemented and successfully tested end-to-end.
+A small FastAPI service deployed to **Azure Container Apps** using **Terraform** and **GitHub Actions**. The API is intentionally simple; this project focuses on infrastructure provisioning, container delivery, workload identity, and repeatable deployments.
 
 ## Architecture
 
-```text
-Developer
-    |
-    | Git push / Pull Request
-    v
-GitHub Repository
-    |
-    v
-GitHub Actions
-    |
-    +-- CI: Python tests + Docker build
-    |
-    +-- Publish: Docker image -> GHCR
-    |
-    +-- Deploy: GitHub OIDC -> Microsoft Entra ID
-                                  |
-                                  v
-                         Azure Container Apps
-                                  |
-                                  v
-                           FastAPI HTTPS API
-
-Terraform
-    |
-    +-- Azure Resource Group
-    +-- Container Apps Environment (Consumption)
-    +-- Container App configuration
-    |
-    +-- Remote state: Azure Blob Storage
+```mermaid
+flowchart LR
+    Git["Git push / pull request"] --> CI["GitHub Actions<br/>pytest + Docker build"]
+    CI -->|"main branch"| GHCR["GitHub Container Registry<br/>latest + commit SHA tags"]
+    GHCR --> CD["GitHub Actions<br/>deploy"]
+    CD -->|"OIDC authentication"| Entra["Microsoft Entra ID"]
+    CD -->|"image update"| ACA["Azure Container Apps<br/>FastAPI over HTTPS"]
+    GHCR -.->|"image pull"| ACA
+    TF["Terraform / AzureRM"] --> Azure["Resource Group +<br/>Container Apps Environment"]
+    TF --> ACA
+    State[("Azure Blob Storage<br/>remote state")] --- TF
 ```
 
-## Implemented Features
+### Infrastructure and delivery
 
-- FastAPI REST application with `/` and `/health` endpoints
-- Automated API tests using pytest
-- Docker containerization with Python 3.12
-- Non-root container execution (UID 10001)
-- GitHub Actions CI/CD pipeline
-- Automated Docker image publishing to GitHub Container Registry (GHCR)
-- Automated deployment to Azure Container Apps
-- Passwordless Azure authentication using GitHub OIDC and Microsoft Entra ID
-- Terraform Infrastructure as Code using AzureRM
-- Remote Terraform state in Azure Blob Storage
-- State locking, Blob versioning, and soft-delete protection
-- Commit SHA-based Docker image tagging
-- HTTPS ingress and autoscaling configuration
+| Area | Implementation |
+| --- | --- |
+| Infrastructure | Terraform (AzureRM 4.x); resource group, Container Apps environment, and Container App |
+| Runtime | Azure Container Apps Consumption, North Europe; 0.25 vCPU / 0.5 GiB, 0–1 replicas |
+| Application | Python 3.12, FastAPI, Uvicorn; `/`, `/health`, and Swagger UI at `/docs` |
+| Container | Python slim base image, non-root runtime user (UID 10001) |
+| CI | GitHub Actions runs `pytest` and a Docker build for pushes and pull requests |
+| Release | On `main`, publish to GHCR with `latest` and commit-SHA tags, then deploy the SHA-tagged image |
+| Identity | GitHub OIDC federation to Microsoft Entra ID; Azure RBAC scoped to the application resource group |
+| State | Separate Azure Blob backend with Entra ID access, state locking, versioning, and soft delete |
 
-## Technology Stack
+The pipeline is defined in [`.github/workflows/ci.yml`](.github/workflows/ci.yml). It verifies the deployed image reference and calls the application's `/health` endpoint after deployment. README-only pushes are excluded from the release workflow.
 
-| Area | Technologies |
-|---|---|
-| Cloud | Microsoft Azure, Azure Container Apps |
-| Infrastructure as Code | Terraform, AzureRM |
-| Containers | Docker, GHCR |
-| CI/CD | GitHub Actions |
-| Identity & Security | Microsoft Entra ID, OIDC, Azure RBAC |
-| Application | Python, FastAPI, Uvicorn |
-| Testing | pytest |
-| Development | Git, Linux, Ubuntu WSL2 |
+**Ownership boundary:** Terraform manages the Azure resources and their configuration; GitHub Actions updates the application image. The Terraform resource uses a narrowly scoped `ignore_changes` rule for the image field to prevent deployment-induced drift.
 
-## Running Locally
+## Run locally
 
-Create a Python virtual environment and install dependencies:
+Requires Python 3.12 and, for the container example, Docker.
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements-dev.txt
-```
-
-Run the application:
-
-```bash
+python -m pytest -v
 uvicorn app.main:app --host 127.0.0.1 --port 8080
 ```
 
-Run tests:
-
-```bash
-python -m pytest -v
-```
-
-Available endpoints:
-
-- `/` – application response
-- `/health` – application health check
-- `/docs` – interactive Swagger API documentation
-
-## Running with Docker
-
-Build the image:
+Alternatively, build and run the container:
 
 ```bash
 docker build -t azure-container-api:local .
+docker run --rm -p 127.0.0.1:8081:8080 azure-container-api:local
 ```
 
-Start a container:
+From another terminal, check `curl http://127.0.0.1:8081/health`. The expected response is `{"status":"healthy"}`.
+
+## Deploy to Azure
+
+The infrastructure lives in [`terraform/`](terraform/). It expects an **existing** Azure Storage backend (configured in [`providers.tf`](terraform/providers.tf)) and appropriate Entra ID / Azure RBAC access. The state storage account is bootstrapped separately, not created by this Terraform configuration.
+
+For a local Terraform run:
 
 ```bash
-docker run -d --rm \
-  --name azure-container-api \
-  -p 127.0.0.1:8081:8080 \
-  azure-container-api:local
-```
-
-Check the API:
-
-```bash
-curl http://127.0.0.1:8081/health
-```
-
-Expected response:
-
-```json
-{"status":"healthy"}
-```
-
-Stop the container:
-
-```bash
-docker stop azure-container-api
-```
-
-Docker commands may require `sudo` depending on local Docker Engine permissions.
-
-## Infrastructure with Terraform
-
-Infrastructure configuration is located in the `terraform/` directory.
-
-The project provisions:
-
-- Azure Resource Group
-- Azure Container Apps Environment using the Consumption workload profile
-- Azure Container App running the published GHCR image
-
-Application configuration:
-
-- Region: North Europe
-- CPU: 0.25 vCPU
-- Memory: 0.5 GiB
-- Minimum replicas: 0
-- Maximum replicas: 1
-- HTTPS ingress enabled
-
-Terraform state is stored in a separately provisioned Azure Blob Storage backend, authenticated using Microsoft Entra ID.
-
-The remote backend and required Azure RBAC permissions must be configured before initializing Terraform.
-
-After authenticating through Azure CLI:
-
-```bash
+az login
 export ARM_SUBSCRIPTION_ID="$(az account show --query id -o tsv | tr -d '\r\n')"
-
 cd terraform
 terraform init
 terraform fmt -check
@@ -166,86 +73,19 @@ terraform validate
 terraform plan
 ```
 
-Apply infrastructure changes only after reviewing the plan:
+Review the plan before running `terraform apply`. The application URL is available from `terraform output -raw app_url` after deployment.
 
-```bash
-terraform apply
-```
+For automated releases, the GitHub repository requires `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID` Actions variables, an Entra federated credential trusted for the repository's `main` branch, and deployment permissions on the target resource group. Azure access uses short-lived OIDC tokens rather than a stored client secret.
 
-## CI/CD Pipeline
+## Verification and trade-offs
 
-The GitHub Actions workflow is defined in `.github/workflows/ci.yml`.
+An end-to-end change to the API response was committed, tested, published to GHCR, and deployed through GitHub Actions. The public endpoint returned the updated response, and a subsequent `terraform plan` reported **no changes**.
 
-**CI – Push and Pull Requests**
+This is a **portfolio reference implementation**, not a production-ready service. The current scope deliberately keeps the application and infrastructure small:
 
-1. Check out the source code.
-2. Configure Python 3.12.
-3. Install dependencies.
-4. Execute automated tests.
-5. Build the Docker image.
+- Scale-to-zero reduces idle compute usage but may introduce cold starts; Azure resources and the separate state storage can still incur charges.
+- CI checks API tests and image build, but does not yet run Terraform plans for pull requests or scan dependencies and images for vulnerabilities.
+- Deployment includes a health request, but not traffic-based rollout gates, automated rollback, or comprehensive monitoring.
+- Application dependencies and the base image are not fully pinned for reproducible builds.
 
-**Container Publishing – Main Branch**
-
-1. Authenticate to GHCR using `GITHUB_TOKEN`.
-2. Build and publish the Docker image.
-3. Tag the image using both `latest` and the Git commit SHA.
-
-**Continuous Deployment – Main Branch**
-
-1. Authenticate to Azure through GitHub OIDC.
-2. Deploy the commit-specific Docker image to Azure Container Apps.
-3. Verify the configured image.
-4. Check the application's `/health` endpoint.
-
-Publishing and deployment depend on successful completion of the preceding stages.
-
-Terraform manages infrastructure configuration, while GitHub Actions manages the deployed application image. The Terraform lifecycle configuration prevents image updates from creating unnecessary drift.
-
-## Security Considerations
-
-- Application containers run as a non-root user.
-- GitHub Actions uses short-lived OIDC authentication instead of stored Azure Client Secrets.
-- Azure deployment permissions are restricted to the application Resource Group.
-- Terraform state access uses Microsoft Entra ID and Azure RBAC.
-- Azure Blob Storage public access and Shared Key access are disabled.
-- Terraform state is protected through Blob versioning and soft-delete retention.
-- HTTPS is enabled for the publicly accessible API.
-- Local environment files and Terraform state files are excluded from version control.
-
-## Verification
-
-The CI/CD implementation was tested by changing the FastAPI application response, committing the change, and pushing it to GitHub.
-
-GitHub Actions successfully tested, published, and deployed the new version.
-
-The public Azure endpoint returned:
-
-```json
-{"message":"Hello from Azure Container Platform v2"}
-```
-
-A subsequent `terraform plan` reported no infrastructure changes.
-
-## Cost and Cleanup
-
-The Container App uses Consumption billing with scale-to-zero enabled. This reduces idle compute consumption but does not guarantee zero Azure costs.
-
-To remove the Terraform-managed application infrastructure:
-
-```bash
-cd terraform
-terraform plan -destroy
-terraform destroy
-```
-
-**Important:** Destroying the application infrastructure disables the live endpoint. The separately provisioned Terraform state Storage Account is not removed by this command and must be managed separately.
-
-Automated deployment should be disabled before removing the target Azure resources.
-
-## Future Improvements
-
-- Application Insights and Azure monitoring
-- Automated security and dependency scanning
-- Infrastructure validation in pull requests
-- Deployment approvals and environment protection
-- Automated rollback and more extensive integration testing
+**Cleanup:** Disable or pause the deployment workflow before removing the Azure target. Run `terraform plan -destroy` and review it before `terraform destroy`. The separately managed remote-state Storage Account is **not** deleted by that command.
