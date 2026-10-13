@@ -9,7 +9,7 @@ def test_home():
 
 	assert response.status_code == 200
 	assert response.json() == {
-		"message": "Hello from Azure Container Platform"
+		"message": "Hello from Azure Container Platform v2"
 	}
 
 def test_health():
