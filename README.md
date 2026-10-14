@@ -23,7 +23,7 @@ flowchart LR
 
 | Area | Implementation |
 | --- | --- |
-| Infrastructure | Terraform (AzureRM 4.x); resource group, Log Analytics workspace, Container Apps environment, and Container App |
+| Infrastructure | Terraform (AzureRM 5.x); resource group, Log Analytics workspace, Container Apps environment, and Container App |
 | Runtime | Azure Container Apps Consumption, North Europe; 0.25 vCPU / 0.5 GiB, 0–1 replicas |
 | Application | Python 3.12, FastAPI, Uvicorn; `/`, `/health`, and Swagger UI at `/docs` |
 | Container | Python slim base image, non-root runtime user (UID 10001) |
@@ -77,6 +77,14 @@ terraform validate
 terraform plan
 ```
 
+AzureRM 5.x no longer registers Azure resource providers automatically. In a subscription that has not used these services before, register them once before the first apply:
+
+```bash
+az provider register --namespace Microsoft.App
+az provider register --namespace Microsoft.OperationalInsights
+az provider register --namespace Microsoft.Insights
+```
+
 Review the plan before running `terraform apply`. The application URL is available from `terraform output -raw app_url` after deployment.
 
 For automated releases, the GitHub repository requires `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID` Actions variables, an Entra federated credential trusted for the repository's `main` branch, and deployment permissions on the target resource group. Azure access uses short-lived OIDC tokens rather than a stored client secret.
@@ -104,4 +112,4 @@ Repository variables: `AZURE_PLAN_CLIENT_ID` (plan identity), `AZURE_CLIENT_ID` 
 
 Both Azure-facing stages are opt-in, so the repository stays green while the environment is torn down: `DEPLOY_ENABLED=true` enables publishing and deployment, and `TF_PLAN_ENABLED=true` enables `terraform plan` and the weekly drift check. Tests, image scanning, `fmt`, `validate` and the Terraform misconfiguration scan always run and need no Azure access.
 
-**Cleanup:** Leave `DEPLOY_ENABLED` unset (or set it to `false`) to prevent deployments after teardown. Run `terraform plan -destroy` and review it before `terraform destroy`. The separately managed remote-state Storage Account is **not** deleted by that command. Provision the remote-state backend and application environment again before re-enabling releases.
+**Cleanup:** Leave `DEPLOY_ENABLED` and `TF_PLAN_ENABLED` unset (or set them to `false`) to prevent deployments and plan runs after teardown. Run `terraform plan -destroy` and review it before `terraform destroy`. The separately managed remote-state Storage Account is **not** deleted by that command. Provision the remote-state backend and application environment again before re-enabling releases.
