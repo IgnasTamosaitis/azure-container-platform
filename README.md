@@ -32,7 +32,7 @@ flowchart LR
 | Identity | GitHub OIDC federation to Microsoft Entra ID; Azure RBAC scoped to the application resource group |
 | State | Separate Azure Blob backend with Entra ID access, state locking, versioning, and soft delete |
 
-The pipeline is defined in [`.github/workflows/ci.yml`](.github/workflows/ci.yml). It verifies the deployed image reference and calls the application's `/health` endpoint after deployment. README-only pushes are excluded from the release workflow.
+The pipeline is defined in [`.github/workflows/ci.yml`](.github/workflows/ci.yml). It verifies the deployed image reference and calls the application's `/health` endpoint after deployment. README-only pushes are ignored. Container publishing and Azure deployment are enabled only when the repository variable `DEPLOY_ENABLED` is set to `true`; otherwise CI runs without releasing.
 
 **Ownership boundary:** Terraform manages the Azure resources and their configuration; GitHub Actions updates the application image. The Terraform resource uses a narrowly scoped `ignore_changes` rule for the image field to prevent deployment-induced drift.
 
@@ -88,4 +88,4 @@ This is a **portfolio reference implementation**, not a production-ready service
 - Deployment includes a health request, but not traffic-based rollout gates, automated rollback, or comprehensive monitoring.
 - Application dependencies and the base image are not fully pinned for reproducible builds.
 
-**Cleanup:** Disable or pause the deployment workflow before removing the Azure target. Run `terraform plan -destroy` and review it before `terraform destroy`. The separately managed remote-state Storage Account is **not** deleted by that command.
+**Cleanup:** Leave `DEPLOY_ENABLED` unset (or set it to `false`) to prevent deployments after teardown. Run `terraform plan -destroy` and review it before `terraform destroy`. The separately managed remote-state Storage Account is **not** deleted by that command. Provision the remote-state backend and application environment again before re-enabling releases.
