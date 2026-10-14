@@ -1,11 +1,9 @@
 name: Terraform
 
 on:
+  # No path filters on pull requests: required status checks must always report
   pull_request:
     branches: [main]
-    paths:
-      - 'terraform/**'
-      - '.github/workflows/terraform.yml'
   push:
     branches: [main]
     paths:
