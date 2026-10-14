@@ -7,10 +7,9 @@ on:
       - 'README.md'
       - 'terraform/**'
       - '.github/workflows/terraform.yml'
+  # No path filters on pull requests: required status checks must always report
   pull_request:
     branches: [main]
-    paths-ignore:
-      - 'README.md'
 
 permissions:
   contents: read
