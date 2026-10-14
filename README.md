@@ -8,16 +8,39 @@ A small FastAPI service deployed to **Azure Container Apps** using **Terraform**
 
 ```mermaid
 flowchart LR
-    Git["Git push / pull request"] --> CI["GitHub Actions<br/>pytest + Docker build"]
-    CI -->|"main branch"| GHCR["GitHub Container Registry<br/>latest + commit SHA tags"]
-    GHCR --> CD["GitHub Actions<br/>deploy"]
-    CD -->|"OIDC authentication"| Entra["Microsoft Entra ID"]
-    CD -->|"image update"| ACA["Azure Container Apps<br/>FastAPI over HTTPS"]
+    PR["Pull request"] --> CI
+    PR --> TFCI
+
+    subgraph APP["Application pipeline (ci.yml)"]
+        CI["pytest + Docker build"] --> Scan["Trivy image scan<br/>fails on fixable HIGH/CRITICAL"]
+    end
+
+    subgraph IAC["Infrastructure pipeline (terraform.yml)"]
+        TFCI["fmt + validate<br/>Trivy config scan"] --> Plan["terraform plan<br/>PR comment + weekly drift check"]
+    end
+
+    Scan -->|"main branch:<br/>same image, no rebuild"| GHCR["GitHub Container Registry<br/>latest + commit SHA tags"]
+    GHCR --> CD["Deploy job"]
+    CD -->|"OIDC"| Entra["Microsoft Entra ID"]
+    Plan -->|"OIDC, read-only identity"| Entra
+    CD -->|"image update + /health check"| ACA
+
+    subgraph AZ["Azure (North Europe)"]
+        ACA["Container App<br/>FastAPI over HTTPS<br/>startup / liveness / readiness probes"]
+        CAE["Container Apps Environment"]
+        LAW["Log Analytics workspace"]
+        Alert["5xx alert (optional)"]
+        CAE --- ACA
+        CAE -->|"logs"| LAW
+        ACA -.-> Alert
+    end
+
     GHCR -.->|"image pull"| ACA
-    TF["Terraform / AzureRM"] --> Azure["Resource Group +<br/>Container Apps Environment"]
-    TF --> ACA
-    State[("Azure Blob Storage<br/>remote state")] --- TF
+    TF["Terraform / AzureRM"] --> AZ
+    State[("Azure Blob Storage<br/>remote state + locking")] --- TF
 ```
+
+Pull requests run both pipelines as required status checks. Publishing, deployment and `terraform plan` only run when their repository variables are enabled.
 
 ### Infrastructure and delivery
 
