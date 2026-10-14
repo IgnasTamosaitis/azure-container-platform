@@ -23,16 +23,20 @@ flowchart LR
 
 | Area | Implementation |
 | --- | --- |
-| Infrastructure | Terraform (AzureRM 4.x); resource group, Container Apps environment, and Container App |
+| Infrastructure | Terraform (AzureRM 4.x); resource group, Log Analytics workspace, Container Apps environment, and Container App |
 | Runtime | Azure Container Apps Consumption, North Europe; 0.25 vCPU / 0.5 GiB, 0–1 replicas |
 | Application | Python 3.12, FastAPI, Uvicorn; `/`, `/health`, and Swagger UI at `/docs` |
 | Container | Python slim base image, non-root runtime user (UID 10001) |
-| CI | GitHub Actions runs `pytest` and a Docker build for pushes and pull requests |
-| Release | On `main`, publish to GHCR with `latest` and commit-SHA tags, then deploy the SHA-tagged image |
-| Identity | GitHub OIDC federation to Microsoft Entra ID; Azure RBAC scoped to the application resource group |
+| CI | `pytest` and a Docker build on pushes and PRs; Trivy scans the image and fails on fixable HIGH/CRITICAL CVEs |
+| IaC checks | On PRs: `terraform fmt`, `validate`, Trivy misconfiguration scan, and a `terraform plan` posted as a PR comment |
+| Drift | Weekly scheduled `terraform plan`; the workflow fails if live Azure resources differ from code |
+| Observability | Log Analytics workspace (30-day retention, 0.5 GB/day cap); startup, liveness and readiness probes on `/health`; optional 5xx email alert |
+| Supply chain | Hash-locked Python dependencies, third-party actions pinned to commit SHAs, Dependabot with a 14-day cooldown |
+| Release | On `main`, push the exact image that was tested and scanned to GHCR (`latest` + commit-SHA tags), then deploy the SHA-tagged image |
+| Identity | GitHub OIDC federation to Entra ID; a deploy identity scoped to the app resource group and a separate read-only identity for `terraform plan` |
 | State | Separate Azure Blob backend with Entra ID access, state locking, versioning, and soft delete |
 
-The pipeline is defined in [`.github/workflows/ci.yml`](.github/workflows/ci.yml). It verifies the deployed image reference and calls the application's `/health` endpoint after deployment. README-only pushes are ignored. Container publishing and Azure deployment are enabled only when the repository variable `DEPLOY_ENABLED` is set to `true`; otherwise CI runs without releasing.
+The application pipeline is defined in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) and the infrastructure pipeline in [`.github/workflows/terraform.yml`](.github/workflows/terraform.yml). It verifies the deployed image reference and calls the application's `/health` endpoint after deployment. README-only pushes are ignored. Container publishing and Azure deployment are enabled only when the repository variable `DEPLOY_ENABLED` is set to `true`; otherwise CI runs without releasing.
 
 **Ownership boundary:** Terraform manages the Azure resources and their configuration; GitHub Actions updates the application image. The Terraform resource uses a narrowly scoped `ignore_changes` rule for the image field to prevent deployment-induced drift.
 
@@ -81,11 +85,23 @@ For automated releases, the GitHub repository requires `AZURE_CLIENT_ID`, `AZURE
 
 An end-to-end change to the API response was committed, tested, published to GHCR, and deployed through GitHub Actions. The public endpoint returned the updated response, and a subsequent `terraform plan` reported **no changes**.
 
-This is a **portfolio reference implementation**, not a production-ready service. The current scope deliberately keeps the application and infrastructure small:
+This is a **portfolio reference implementation**, not a production-ready service. Known trade-offs:
 
-- Scale-to-zero reduces idle compute usage but may introduce cold starts; Azure resources and the separate state storage can still incur charges.
-- CI checks API tests and image build, but does not yet run Terraform plans for pull requests or scan dependencies and images for vulnerabilities.
-- Deployment includes a health request, but not traffic-based rollout gates, automated rollback, or comprehensive monitoring.
-- Application dependencies and the base image are not fully pinned for reproducible builds.
+- Scale-to-zero reduces idle compute usage but may introduce cold starts; Azure resources, Log Analytics ingestion and the separate state storage can still incur charges.
+- The Trivy scans gate on fixable HIGH/CRITICAL findings only; any accepted risk is documented in `.trivyignore` with a reason rather than silently skipped.
+- Deployment includes probes, a post-deploy health check and an optional 5xx alert, but not traffic-split rollouts or automated rollback.
+- The base image is referenced by tag; pinning it to a digest is the next step towards fully reproducible builds.
+
+### Pipeline identities
+
+`terraform plan` runs under its own Entra ID app registration, so pull requests never hold write access to Azure resources. It needs:
+
+- **Reader** on `rg-container-platform-dev`, to refresh existing resources.
+- **Storage Blob Data Contributor** on the `tfstate` container, to read state and take the state lock.
+- Federated credentials for the subjects `repo:<owner>/azure-container-platform:pull_request` and `repo:<owner>/azure-container-platform:ref:refs/heads/main`.
+
+Repository variables: `AZURE_PLAN_CLIENT_ID` (plan identity), `AZURE_CLIENT_ID` (deploy identity), `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, and optionally `ALERT_EMAIL`.
+
+Both Azure-facing stages are opt-in, so the repository stays green while the environment is torn down: `DEPLOY_ENABLED=true` enables publishing and deployment, and `TF_PLAN_ENABLED=true` enables `terraform plan` and the weekly drift check. Tests, image scanning, `fmt`, `validate` and the Terraform misconfiguration scan always run and need no Azure access.
 
 **Cleanup:** Leave `DEPLOY_ENABLED` unset (or set it to `false`) to prevent deployments after teardown. Run `terraform plan -destroy` and review it before `terraform destroy`. The separately managed remote-state Storage Account is **not** deleted by that command. Provision the remote-state backend and application environment again before re-enabling releases.
