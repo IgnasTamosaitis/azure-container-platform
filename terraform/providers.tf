@@ -7,8 +7,7 @@ terraform {
     container_name       = "tfstate"
     key                  = "azure-container-platform.tfstate"
 
-    use_azuread_auth = true
-    use_cli          = true
+    use_azuread_auth = true # local runs use `az login`; CI uses OIDC via ARM_* env vars
   }
 
   required_providers {
